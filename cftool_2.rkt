@@ -24,15 +24,12 @@
     (apply hash (interleave keys vals))))
 
 
-(define (prefix-env-domain domain-prefix env)
-  (string-append domain-prefix "." (select env 'hosted-zone)))
-
-;; ;; Group a list by one of their properies then convert
-;; ;; to a hash table indexed by that property
-;; (define (list->grouped-hash items key)
-;;   (apply hash (foldr (λ (g acc) (cons (hash-ref (car g) key) (cons g acc)))
-;;                      '()
-;;                      (group-by (λ (i) (hash-ref i key)) items))))
+;; Group a list by one of their properies then convert
+;; to a hash table indexed by that property
+(define (list->grouped-hash items key)
+  (apply hash (foldr (λ (g acc) (cons (hash-ref (car g) key) (cons g acc)))
+                     '()
+                     (group-by (λ (i) (hash-ref i key)) items))))
 
 
 ;; Define new syntax for creating new cf-item types
@@ -43,39 +40,13 @@
 ;; Define cf-item types
 (define-cf-item aws-credential)
 (define-cf-item aws-account)
-(define-cf-item acm-certificate)
+;; (define-cf-item aws-hosted-zone)
 (define-cf-item environment)
 (define-cf-item stack-template)
 (define-cf-item stack-group)
 (define-cf-item stack-config)
 (define-cf-item stack-param)
 (define-cf-item stack-warning)
-
-(define stacks (make-hash))
-(define (register-stack new-stack)
-  (hash-set! stacks (select (new-stack) 'id) new-stack))
-
-(define stack-groups (make-hash))
-(define (register-stack-group new-stack-group)
-  (hash-set! stack-groups (select new-stack-group 'id) new-stack-group))
-
-(define environments (make-hash))
-(define (register-environment new-environment)
-  (hash-set! environments (select new-environment 'id) new-environment))
-
-(define accounts (make-hash))
-(define (register-account new-account)
-  (hash-set! accounts (select new-account 'id) new-account))
-
-(define credentials (make-hash))
-(define (register-credential new-credential)
-  (hash-set! credentials (select new-credential 'id) new-credential))
-
-(define certificates (make-hash))
-(define (register-certificate new-certificate)
-  (hash-set! certificates (select new-certificate 'id) new-certificate))
-
-
 
 
 (define (eval-cft-syntax namespace filepath file-port)
@@ -85,10 +56,9 @@
 
 ;; Parse a .cft into hash sets of cf-items
 (define (eval-config namespace filepath)
-  (call-with-input-file filepath
-    ((curry eval-cft-syntax) namespace filepath))
-  #t)
-
+  (list->grouped-hash
+   (call-with-input-file filepath
+     ((curry eval-cft-syntax) namespace filepath)) 'type))
 
 
 ;; Select unique item from list with matching id
@@ -105,9 +75,7 @@
 (define (select items selector)
   (cond
     [(list? items) (select-list items selector)]
-    [(hash? items) (if (hash-has-key? items selector)
-                       (hash-ref items selector)
-                       "")]))
+    [(hash? items) (hash-ref items selector)]))
 
 
 ;; Select recursively
@@ -153,32 +121,10 @@
         (string-trim stdout)
         (error "Failed to fetch AWS Account ID."))))
 
-(define (get-cert-full-domain cert)
-  (if (hash-has-key? cert 'domain-prefix)
-      (string-append (select cert 'domain-prefix) "." (select cert 'domain))
-      (select cert 'domain)))
-
-
-(define (acm-get-arn cert [dry-run #f])
-  (let* ([region (symbol->string (select cert 'region))]
-         [domain (get-cert-full-domain cert)]
-         [query (string-append "CertificateSummaryList[?DomainName == '" domain "'].[CertificateArn][0][0] || ''")]
-         [args (list "--region" region
-                     "--query"  query
-                     "--output" "text")])
-    (let-values ([(status stdout stderr)
-                  (aws-cli "acm" "list-certificates" args dry-run)])
-      (if (= status 0)
-          (string-trim stdout)
-          (begin
-            (displayln stderr)
-            (error "Failed to fetch ACM Certificate."))))))
-
 
 (define (stack-param->json param)
-  (let* ([key (car param)]
-         [val (cdr param)]
-         [value (if (procedure? val) (val) val)])
+  (let ([key (select param 'id)]
+        [value (select param 'value)])
     (string-append "{\"ParameterKey\": \"" key "\", \"ParameterValue\": \"" value "\"}")))
 
 
@@ -187,19 +133,21 @@
 
 
 (define (stack-args template environment)
-  (stack-args->list (select environment 'region)
-                    (select template 'stack-name)
-                    (select template 'path)
-                    (select template 'parameters)
-                    (select template 'capabilities)))
+  (let ([config (selectr template (list 'configs (select environment 'id)))])
+    (stack-args->list (select environment 'base-region)
+                      (select config 'stack-name)
+                      (select template 'path)
+                      (select config 'parameters)
+                      (select template 'capabilities))))
 
 
 (define (stack-args-short template environment)
-(stack-args->list (select environment 'region)
-                      (select template 'stack-name)
+  (let ([config (selectr template (list 'configs (select environment 'id)))])
+    (stack-args->list (select environment 'base-region)
+                      (select config 'stack-name)
                       ""
                       '()
-                      ""))
+                      "")))
 
 
 (define (stack-args->list region stack-name template-body parameters capabilities)
@@ -228,9 +176,9 @@
       [else (begin (read-char (current-input-port)) (ask prompt))])))
 
 
-(define (show-stack-warning action stack-id)
+(define (show-stack-warning action cft-config stack-id)
   (let* ([warning-id (string->symbol (string-append (symbol->string action) "-warning"))]
-         [warning (select ((select stacks stack-id)) warning-id)])
+         [warning (selectr cft-config (list 'stack-template stack-id 'warnings warning-id 'value))])
     (when (non-empty-string? (string-trim warning))
       (displayln warning)
       (displayln "Please complete this step before continuing.")
@@ -243,52 +191,20 @@
     (show-stack-warning cft-config stack-id action)))
 
 
-(define (r53-get-hosted-zone-id env #:private-zone is-private #:dry-run [dry-run #f])
-  (let* ([region (symbol->string (select env 'region))]
-         [domain (select env 'hosted-zone)]
-         [private-zone (if is-private "true" "false")]
-         [query (string-append "HostedZones[?(Config.PrivateZone == `" private-zone "` && Name == `" domain ".`)].Id[] || \"\"")]
-         [args (list "--region" region
-                     "--query"  query
-                     "--output" "text")])
-    (let-values ([(status stdout stderr)
-                  (aws-cli "route53" "list-hosted-zones" args dry-run)])
-      (if (= status 0)
-          (string-trim (string-trim stdout) "/hostedzone/")
-          (begin
-            (displayln stderr)
-            (error "Failed to fetch hosted zone id."))))))
-
-(define (r53-private-hosted-zone-id env) (r53-get-hosted-zone-id env  #:private-zone #t))
-(define (r53-public-hosted-zone-id env) (r53-get-hosted-zone-id env #:private-zone #f))
-
-(define (elbv2-dns-for-load-balancer env load-balancer-name #:dry-run [dry-run #f])
-  (let* ([region (symbol->string (select env 'region))]
-         [query (string-append "LoadBalancers[?LoadBalancerName == `" load-balancer-name "`].DNSName[] || \"\"")]
-         [args (list "--region" region
-                     "--query"  query
-                     "--output" "text")])
-    (let-values ([(status stdout stderr)
-                  (aws-cli "elbv2" "describe-load-balancers" args dry-run)])
-      (if (= status 0)
-          (string-trim stdout)
-          (begin
-            (displayln stderr)
-            (error "Failed to fetch load balancer DNS."))))))
 
 
-(define (display-sorted-keys hashmap)
-  (let ([keys (map symbol->string (hash-keys hashmap))])
-    (for ([key (sort keys string<?)]) (displayln key))))
+(define (list-stacks cft-config is-group)
+  (if is-group
+      (for ([stack (select cft-config 'stack-group)])
+        (displayln (select stack 'id)))
+      (for ([stack (select cft-config 'stack-template)])
+        (displayln (select stack 'id)))))
 
-
-(define (list-stacks is-group)
-  (display-sorted-keys (if is-group stack-groups stacks)))
 
 ;; Returns the commands use to modify a stack
-(define (stack-cmds action stack-id environment-id dry-run)
-  (let* ([env (select environments environment-id)]
-         [template ((select stacks stack-id) env)]
+(define (stack-cmds action cft-config stack-id environment-id dry-run)
+  (let* ([env (selectr cft-config (list 'environment environment-id))]
+         [template (selectr cft-config (list 'stack-template stack-id))]
          [args (stack-args template env)]
          [short-args (stack-args-short template env)]
          [wait-args (flatlist (string-append "stack-" (symbol->string action) "-complete") short-args)]
@@ -316,13 +232,13 @@
         (string-append "\nCompleted " action " Stack group '" target"'"))])))
 
 
-(define (modify-stacks action stack-ids environment-id show-warnings dry-run)
+(define (modify-stacks action cft-config stack-ids environment-id show-warnings dry-run)
   (for/and ([stack-id stack-ids])
-    (when show-warnings (show-stack-warning action stack-id))
+    (when show-warnings (show-stack-warning action cft-config stack-id))
     (let-values ([(begin-msg success-msg error-msg)
                   (get-msgs action stack-id environment-id 'modify-stacks)]
                  [(action-cmd wait-cmd)
-                  (stack-cmds action stack-id environment-id dry-run)])
+                  (stack-cmds action cft-config stack-id environment-id dry-run)])
       (displayln begin-msg)
       (if (and (call-with-values action-cmd cmd-success?)
                (call-with-values wait-cmd cmd-success?))
@@ -346,14 +262,16 @@
         (displayln success-msg)))))
 
 
-(define (cftool action is-group targets env show-warnings dry-run)
-  (cond [(eq? action 'list) (display-sorted-keys (if is-group stack-groups stacks))]
-        [is-group (modify-stack-groups action targets env show-warnings dry-run)]
-        [else (modify-stacks action targets env show-warnings dry-run)]))
+(define (cftool cft-config action is-group targets env show-warnings dry-run)
+  (if (eq? action 'list)
+      (list-stacks cft-config is-group)
+      (if is-group
+          (modify-stack-groups action cft-config targets env show-warnings dry-run)
+          (modify-stacks action cft-config targets env show-warnings dry-run))))
 
 
 ;; Handle cmd line args and return a cftool configuration
-(define (cftool-config)
+(define (cftool-config namespace)
   (let* ([action (make-parameter 'nil)]
          [is-group (make-parameter #f)]
          [env (make-parameter 'nil)]
@@ -371,15 +289,14 @@
                    [("-u" "--update") "Update the specified stack or stack group" (action 'update)]
                    [("-d" "--delete") "Delete the specified stack or stack group" (action 'delete)]
                    [("-l" "--list") "List all known stacks or stack groups" (action 'list)]
-                   #:args target-names (for/list ([name target-names]) (string->symbol name)))])
+                   #:args target-names (for/list ([name target-names]) (string->symbol name)))]
+         [cft-config (eval-config namespace "stacks.cft")])
     (when (eq? (action) 'nil)
       (displayln "Error an action is required.\nPlease provide an action and try again.")
       (exit))
-    (eval-config cftool-namespace "stacks.cft")
-    (values (action) (is-group) targets (env) (show-warnings) (dry-run))))
+    (values cft-config (action) (is-group) targets (env) (show-warnings) (dry-run))))
 
 ;; Execute cftool using a cftool config
-(call-with-values (lambda () (cftool-config)) cftool)
+;; (call-with-values (lambda () (cftool-config cftool-namespace)) cftool)
 
-;; (eval-config cftool-namespace "stacks.cft")
-;; (pretty-print (elbv2-dns-for-load-balancer (car (hash-values environments)) "MOST-Private-ALB" #:dry-run #f))
+(pretty-print (eval-config cftool-namespace "stacks.cft"))
