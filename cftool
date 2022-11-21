@@ -45,31 +45,131 @@
 
 
 (define (prefix-env-domain domain-prefix env)
-  (string-append domain-prefix "." (select env 'hosted-zone)))
+  (string-append domain-prefix "." (environment-hosted-zone env)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Cftool Syntax Functions ;;
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+
+(define-syntax-rule (define-mutable-hashmap name)
+  (begin
+    (define name (make-hash))
+    (set! name (make-hash))))
+
+
+(define (add-if-key-missing hashmap key value)
+    (if (hash-has-key? hashmap key)
+        (begin
+          (displayln (string-append "ERROR: Duplicate key: " (symbol->string key)))
+          (exit 1))
+        (hash-set! hashmap key value)))
+
 
 ;; Define new syntax for creating new cf-item types
 ;; This will create:
 ;; 1. A function for creating the new types.
 ;; 2. A hash-map for storing registered types
 ;; 3. A function to register types (store type instance in hash-map)
-(define-syntax-rule (define-cf-item name collection-name fn-name)
-  (begin
-    (define name (make-keyword-procedure ((curry cf-item->hash) 'name)))
-    (define collection-name (make-hash))
-    (define (fn-name item) (hash-set! collection-name (select item 'id) item))))
+;; (define-syntax-rule (define-cf-item name collection-name fn-name)
+;;   (begin
+;;     (define name (make-keyword-procedure ((curry cf-item->hash) 'name)))
+;;     (define collection-name (make-hash))
+;;     (define (fn-name item) (hash-set! collection-name (hash-ref item 'id) item))))
 
 ;; Define cf-item types, collections, and registration-functions
-(define-cf-item aws-credential   credentials   register-credential)
-(define-cf-item aws-account      accounts      register-account)
-(define-cf-item acm-certificate  certificates  register-certificate)
-(define-cf-item environment      environments  register-environment)
-(define-cf-item stack-template   stacks        register-stack)
-(define-cf-item stack-group      stack-groups  register-stack-group)
+;; (define-cf-item aws-credential   credentials   register-credential)
+;; (define-cf-item aws-account      accounts      register-account)
+;; (define-cf-item stack-group      stack-groups  register-stack-group)
 
+(struct stack (id
+               path
+               capabilities
+               dependencies
+               pre-create-fn
+               post-create-fn
+               pre-update-fn
+               post-update-fn
+               pre-delete-fn
+               post-delete-fn
+               create-warning
+               update-warning
+               delete-warning
+               name
+               parameters))
+
+(define stacks (make-hash))
+
+;; Return a stack struct comtaining provided values
+(define (stack-template
+         #:id id
+         #:path path
+         #:stack-name name
+         #:capabilities [capabilities null]
+         #:depends-on [dependencies null]
+         #:pre-create-fn [pre-create-fn null]
+         #:post-create-fn [post-create-fn null]
+         #:pre-update-fn [pre-update-fn null]
+         #:post-update-fn [post-update-fn null]
+         #:pre-delete-fn [pre-delete-fn null]
+         #:post-delete-fn [post-delete-fn null]
+         #:create-warning [create-warning null]
+         #:update-warning [update-warning null]
+         #:delete-warning [delete-warning null]
+         #:parameters [parameters null])
+  (stack id
+         path
+         capabilities
+         dependencies
+         pre-create-fn
+         post-create-fn
+         pre-update-fn
+         post-update-fn
+         pre-delete-fn
+         post-delete-fn
+         create-warning
+         update-warning
+         delete-warning
+         name
+         parameters))
+
+(define (register-stack stack)
+  (let* ([stack-id (stack-id (stack))])
+    (if (hash-has-key? stacks stack-id)
+        (displayln (string-append "ERROR: duplicate stack-template identifier "
+                                  (symbol->string stack-id)))
+        (hash-set! stacks stack-id stack))))
+
+(define-mutable-hashmap stack-groups)
+(struct stack-group (id stacks))
+(define-syntax-rule (define-stack-group id stacks)
+  (begin
+    (define id (stack-group 'id stacks))
+    (add-if-key-missing stack-groups 'id id)))
+
+
+(define-mutable-hashmap accounts)
+(struct account (id name aws-id))
+(define-syntax-rule (define-account id #:name name #:aws-id aws-id)
+  (begin
+    (define id (account 'id name aws-id))
+    (add-if-key-missing accounts 'id id)))
+
+
+(define-mutable-hashmap environments)
+(struct environment (id name account region hosted-zone))
+(define-syntax-rule (define-environment id #:name name #:account account #:region region #:hosted-zone hosted-zone)
+  (begin
+    (define id (environment 'id name account region hosted-zone))
+    (add-if-key-missing environments 'id id)))
+
+;; ACM Certificates
+(define-mutable-hashmap certificates)
+(struct certificate (id region domain domain-prefix))
+(define-syntax-rule (define-certificate (id env) #:region region #:domain domain #:domain-prefix domain-prefix)
+  (begin
+    (define (id [env env-default]) (certificate 'id region domain domain-prefix))
+    (add-if-key-missing certificates 'id id)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Eval Syntax Functions ;;
@@ -175,13 +275,13 @@
 
 
 (define (get-cert-full-domain cert)
-  (if (hash-has-key? cert 'domain-prefix)
-     (string-append (select cert 'domain-prefix) "." (select cert 'domain))
-     (select cert 'domain)))
+  (if (non-empty-string? (certificate-domain-prefix cert))
+      (string-append (certificate-domain-prefix cert) "." (certificate-domain cert))
+      (certificate-domain cert)))
 
 
 (define (acm-get-arn cert [dry-run #f])
-  (let* ([region (symbol->string (select cert 'region))]
+  (let* ([region (symbol->string (certificate-region cert))]
          [domain (get-cert-full-domain cert)]
          [query (string-append "CertificateSummaryList[?DomainName == '" domain "'].[CertificateArn][0][0] || ''")]
          [args (list "--region" region
@@ -198,8 +298,8 @@
 
 
 (define (r53-get-hosted-zone-id env #:private-zone is-private #:dry-run [dry-run #f])
-  (let* ([region (symbol->string (select env 'region))]
-         [domain (select env 'hosted-zone)]
+  (let* ([region (symbol->string (environment-region env))]
+         [domain (environment-hosted-zone env)]
          [private-zone (if is-private "true" "false")]
          [query (string-append "HostedZones[?(Config.PrivateZone == `" private-zone "` && Name == `" domain ".`)].Id[] || \"\"")]
          [args (list "--region" region
@@ -221,7 +321,7 @@
 
 
 (define (elbv2-dns-for-load-balancer env load-balancer-name #:dry-run [dry-run #f])
-  (let* ([region (symbol->string (select env 'region))]
+  (let* ([region (symbol->string (environment-region env))]
          [query (string-append "LoadBalancers[?LoadBalancerName == `" load-balancer-name "`].DNSName[] || \"\"")]
          [args (list "--region" region
                     "--query"  query
@@ -238,7 +338,7 @@
 
 
 (define (iam-create-service-linked-role env service-name [dry-run #f])
-  (let* ([region (symbol->string (select env 'region))]
+  (let* ([region (symbol->string (environment-region env))]
          [args (list "--region" region
                     "--aws-service-name" service-name)])
     (let-values ([(status stdout stderr)
@@ -268,16 +368,16 @@
 
 
 (define (stack-args template environment)
-  (stack-args->list (select environment 'region)
-                   (select template 'stack-name)
-                   (select template 'path)
-                   (select template 'parameters)
-                   (select template 'capabilities)))
+  (stack-args->list (environment-region environment)
+                   (stack-name template)
+                   (stack-path template)
+                   (stack-parameters template)
+                   (stack-capabilities template)))
 
 
 (define (stack-args-short template environment)
-  (stack-args->list (select environment 'region)
-                   (select template 'stack-name)
+  (stack-args->list (environment-region environment)
+                   (stack-name template)
                    ""
                    '()
                    ""))
@@ -305,9 +405,11 @@
   (unless (stack-definition-exists? stack-id)
     (displayln (string-append "ERROR: Unknown stack '" (symbol->string stack-id) "'"))
     (exit 1))
-  (let* ([warning-id (string->symbol (string-append (symbol->string action) "-warning"))]
-         [stack ((select stacks stack-id))]
-         [warning (select stack warning-id)])
+  (let* ([stack ((hash-ref stacks stack-id))]
+         [warning (match action
+                    ['create (stack-create-warning stack)]
+                    ['update (stack-update-warning stack)]
+                    ['delete (stack-delete-warning stack)])])
     (when (and (string? warning)
               (non-empty-string? (string-trim warning)))
       (displayln warning)
@@ -317,26 +419,23 @@
         (exit)))))
 
 (define (stack-definition-exists? stack-id)
-  (procedure? (select stacks stack-id)))
+  (hash-has-key? stacks stack-id))
 
 (define (stack-group-definition-exists? stack-group-id)
-  (hash? (select stack-groups stack-group-id)))
+  (stack-group? (hash-ref stack-groups stack-group-id)))
 
 (define (show-stack-group-warnings action stack-group-id)
   (unless (stack-group-definition-exists? stack-group-id)
     (displayln (string-append "ERROR: Unknown stack group '" (symbol->string stack-group-id) "'"))
     (exit 1))
-  (for/and ([stack-id (selectr stack-groups (list stack-group-id 'stacks))])
+  (for/and ([stack-id (stack-group-stacks (hash-ref stack-groups stack-group-id))])
     (show-stack-warning action stack-id)))
 
 
-(define (list-stacks is-group)
-  (display-sorted-keys (if is-group stack-groups stacks)))
-
 ;; Returns the commands use to modify a stack
 (define (stack-cmds action stack-id environment-id dry-run)
-  (let* ([env (select environments environment-id)]
-         [template ((select stacks stack-id) env)]
+  (let* ([env (hash-ref environments environment-id)]
+         [template ((hash-ref stacks stack-id) env)]
          [args (stack-args template env)]
          [short-args (stack-args-short template env)]
          [wait-args (flatlist (string-append "stack-" (symbol->string action) "-complete") short-args)]
@@ -394,7 +493,7 @@
     (let-values ([(begin-msg success-msg)
                   (get-msgs action stack-group-id environment-id 'modify-stack-groups)])
       (let ([stack-ids
-             (selectr stack-groups (list stack-group-id 'stacks))])
+             (stack-group-stacks (hash-ref stack-groups stack-group-id))])
         (when (eq? action 'delete)
           (set! stack-ids (reverse stack-ids)))
         (displayln begin-msg)
@@ -411,11 +510,12 @@
        [is-group (modify-stack-groups action targets env show-warnings dry-run)]
        [else (modify-stacks action targets env show-warnings dry-run)]))
 
-(define (check-cli-credentials env dry-run)
-  (let ([fetched-id (fetch-aws-account-id dry-run)]
-        [env-id (selectr environments (list env 'aws-account 'id))])
-    (unless (equal? fetched-id env-id)
-      (displayln (string-append "ERROR: Account ID of current AWS_PROFILE does not match ID specified for environment " (symbol->string env)))
+(define (check-cli-credentials env-id dry-run)
+  (let* ([fetched-id (fetch-aws-account-id dry-run)]
+         [env-acc (environment-account (hash-ref environments env-id))]
+         [acc-id (account-aws-id env-acc )])
+    (unless (equal? fetched-id acc-id)
+      (displayln (string-append "ERROR: Account ID of current AWS_PROFILE does not match ID specified for environment " (symbol->string env-id)))
       (displayln "Please ensure you are using the correct AWS_PROFILE and try again.")
       (exit 1))))
 
@@ -454,4 +554,15 @@
    (exit 1))
 
 ;; (eval-config cftool-namespace "stacks.cft")
-;; (pretty-print ((select stacks 'SysAdmin-Service)))
+;; (pretty-print stacks)
+;; (pretty-print ((hash-ref stacks 'SysAdmin-Service)))
+
+
+
+;; (define iam
+;;   (stack-template
+;;    #:id 'IAM
+;;    #:path "some-path"
+;;    #:stack-name "test"))
+
+;; (pretty-print stacks)
