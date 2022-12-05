@@ -135,10 +135,7 @@
 
 (define (register-stack stack)
   (let* ([stack-id (stack-id (stack))])
-    (if (hash-has-key? stacks stack-id)
-        (displayln (string-append "ERROR: duplicate stack-template identifier "
-                                  (symbol->string stack-id)))
-        (hash-set! stacks stack-id stack))))
+    (add-if-key-missing stacks stack-id stack)))
 
 (define-mutable-hashmap stack-groups)
 (struct stack-group (id stacks))
