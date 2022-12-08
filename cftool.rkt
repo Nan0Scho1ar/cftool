@@ -1,5 +1,15 @@
 #!/usr/bin/env racket
 #lang racket
+(require syntax/parse/define)
+(require json)
+
+;; #lang racket/base
+;; (require racket/list)
+;; (require racket/string)
+;; (require racket/function)
+;; (require racket/port)
+;; (require racket/match)
+;; (require racket/cmdline)
 
 ;; NS stuff used for parsing cft file
 (define-namespace-anchor ns-anchor)
@@ -82,6 +92,156 @@
 ;; (define-cf-item aws-account      accounts      register-account)
 ;; (define-cf-item stack-group      stack-groups  register-stack-group)
 
+
+
+(define-mutable-hashmap stacks)
+(struct stack (id
+               path
+               name
+               capabilities
+               dependencies
+               before-create
+               after-create
+               before-update
+               after-update
+               before-delete
+               after-delete
+               create-warning
+               update-warning
+               delete-warning
+               parameters))
+
+(begin-for-syntax
+  (define-syntax-class stack-names
+    #:commit
+    (pattern (stack-name:expr
+              (~optional (~seq #:env environment:expr)))))
+
+  (define-syntax-class parameter
+    #:commit
+    (pattern (key:expr
+              value:expr
+              (~optional (~seq #:env environment:expr))))))
+
+(define-syntax-parser define-stack
+  [(_:id (id:id env:id)
+         (~alt
+          (~once (~seq #:path path:expr))
+          (~once
+           (~or*
+            (~seq #:stack-name (names:stack-names ...))
+            (~seq #:stack-name stack-name:expr)))
+          (~optional (~seq #:capabilities capabilities:expr))
+          (~optional (~seq #:depends-on dependencies:expr))
+          (~optional (~seq #:before-create before-create:expr))
+          (~optional (~seq #:after-create after-create:expr))
+          (~optional (~seq #:before-update before-update:expr))
+          (~optional (~seq #:after-update after-update:expr))
+          (~optional (~seq #:before-delete before-delete:expr))
+          (~optional (~seq #:after-delete after-delete:expr))
+          (~optional (~seq #:create-warning create-warning:expr))
+          (~optional (~seq #:update-warning update-warning:expr))
+          (~optional (~seq #:delete-warning delete-warning:expr))
+          (~optional (~seq #:parameters (params:parameter ...))))
+         ...)
+   (syntax/loc this-syntax
+     (begin
+       (define (id [env env-default])
+         (stack 'id
+                path
+                (~? (first
+                     (filter
+                      values
+                      (list (and (~? (eq? env names.environment) #t)
+                                 names.stack-name)
+                            ...)))
+                    stack-name)
+                (~? capabilities   null)
+                (~? dependencies   null)
+                (~? before-create  null)
+                (~? after-create   null)
+                (~? before-update  null)
+                (~? after-update   null)
+                (~? before-delete  null)
+                (~? after-delete   null)
+                (~? create-warning null)
+                (~? update-warning null)
+                (~? delete-warning null)
+                (~? (filter values (list (and (~? (eq? env params.environment) #t)
+                                              (cons (symbol->string params.key) params.value))
+                                         ...))
+                    null)))
+       (add-if-key-missing stacks 'id id)))])
+
+
+
+;; (define-syntax (define-stack stx)
+;;   (syntax-parse stx
+;;     [(define-stack (id env)
+;;        (~alt
+;;         (~once (~seq #:path path))
+;;         (~once (~seq #:stack-name stack-name))
+;;         (~optional (~seq #:capabilities capabilities:expr))
+;;         (~optional (~seq #:depends-on dependencies:expr))
+;;         (~optional (~seq #:before-create before-create:expr))
+;;         (~optional (~seq #:after-create after-create:expr))
+;;         (~optional (~seq #:before-update before-update:expr))
+;;         (~optional (~seq #:after-update after-update:expr))
+;;         (~optional (~seq #:before-delete before-delete:expr))
+;;         (~optional (~seq #:after-delete after-delete:expr))
+;;         (~optional (~seq #:create-warning create-warning:expr))
+;;         (~optional (~seq #:update-warning update-warning:expr))
+;;         (~optional (~seq #:delete-warning delete-warning:expr))
+;;         (~optional (~seq #:parameters parameters:expr)))
+;;        ...)
+;;      #'(begin
+;;          (define (id [env env-default])
+;;            (stack 'id
+;;                   path
+;;                   stack-name
+;;                   (~? (~@ capabilities) (~@ null))
+;;                   (~? (~@ dependencies) (~@ null))
+;;                   (~? (~@ before-create) (~@ null))
+;;                   (~? (~@ after-create) (~@ null))
+;;                   (~? (~@ before-update) (~@ null))
+;;                   (~? (~@ after-update) (~@ null))
+;;                   (~? (~@ before-delete) (~@ null))
+;;                   (~? (~@ after-delete) (~@ null))
+;;                   (~? (~@ create-warning) (~@ null))
+;;                   (~? (~@ update-warning) (~@ null))
+;;                   (~? (~@ delete-warning) (~@ null))
+;;                   (~? (~@ parameters) (~@ null))))
+;;          (add-if-key-missing stacks 'id id))]))
+
+
+;; (define-mutable-hashmap stacks)
+;; (struct stack (id
+;;                path
+;;                capabilities
+;;                dependencies
+;;                pre-create-fn
+;;                post-create-fn
+;;                pre-update-fn
+;;                post-update-fn
+;;                pre-delete-fn
+;;                post-delete-fn
+;;                create-warning
+;;                update-warning
+;;                delete-warning
+;;                name
+;;                parameters))
+
+;; (define-syntax (define-stack stx)
+;;   (define-splicing-syntax-class maybe-capabilities
+;;     (pattern (~seq #:capabilities capabilities:expr))
+;;     (pattern (~seq)
+;;              #:with capabilities null))
+;;   (syntax-parse stx
+;;     [(define-stack #:id id capabilities:maybe-capabilities)
+;;      #'(stack id capabilities.capabilies)]))
+
+
+#;
 (struct stack (id
                path
                capabilities
@@ -97,10 +257,11 @@
                delete-warning
                name
                parameters))
-
+#;
 (define stacks (make-hash))
 
-;; Return a stack struct comtaining provided values
+;; Return a stack struct containing provided values
+#;
 (define (stack-template
          #:id id
          #:path path
@@ -133,9 +294,9 @@
          name
          parameters))
 
-(define (register-stack stack)
-  (let* ([stack-id (stack-id (stack))])
-    (add-if-key-missing stacks stack-id stack)))
+;; (define (register-stack stack)
+;;   (let* ([stack-id (stack-id (stack))])
+;;     (add-if-key-missing stacks stack-id stack)))
 
 (define-mutable-hashmap stack-groups)
 (struct stack-group (id stacks))
@@ -346,22 +507,25 @@
            (displayln stderr)
            (begin
              (displayln "Failed to create service linked role for: " service-name)
-             (exit 1))))))
-  )
+             (exit 1)))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Modify Stack Functions ;;
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(define (jsonize-stack-params params)
-  (string-append "[\n" (string-join (map stack-param->json params) ", ") "\n]"))
+(define (jsonize-stack-params params [pretty #f])
+  (if pretty
+      (string-append "[\n  " (string-join (map (λ (param) (stack-param->json param #t)) params) ",\n  ") "\n]")
+      (string-append "[\n" (string-join (map stack-param->json params) ", ") "\n]")))
 
 
-(define (stack-param->json param)
+(define (stack-param->json param [pretty #f])
   (let* ([key (car param)]
          [val (cdr param)]
          [value (if (procedure? val) (val) val)])
-    (string-append "{\"ParameterKey\": \"" key "\", \"ParameterValue\": \"" value "\"}")))
+    (if pretty
+        (string-append "{\"" key "\": \""  value "\"}")
+        (string-append "{\"ParameterKey\": \"" key "\", \"ParameterValue\": \"" value "\"}"))))
 
 
 (define (stack-args template environment)
@@ -481,6 +645,13 @@
       (newline)
       #t)))
 
+(define (print-stack-params stack-ids environment-id)
+  (for/and ([stack-id stack-ids])
+    (displayln
+     (jsonize-stack-params
+      (stack-parameters ((hash-ref stacks stack-id) (hash-ref environments environment-id)))
+      #t))))
+
 
 (define (modify-stack-groups action stack-group-ids environment-id show-warnings dry-run)
   (for/and ([stack-group-id stack-group-ids])
@@ -504,8 +675,13 @@
 
 (define (cftool action is-group targets env show-warnings dry-run)
   (cond [(eq? action 'list) (display-sorted-keys (if is-group stack-groups stacks))]
-       [is-group (modify-stack-groups action targets env show-warnings dry-run)]
-       [else (modify-stacks action targets env show-warnings dry-run)]))
+        [(eq? action 'params) (print-stack-params targets env)]
+        [is-group (begin
+                    (check-cli-credentials env #f)
+                    (modify-stack-groups action targets env show-warnings dry-run))]
+        [else (begin
+                (check-cli-credentials env #f)
+                (modify-stacks action targets env show-warnings dry-run))]))
 
 (define (check-cli-credentials env-id dry-run)
   (let* ([fetched-id (fetch-aws-account-id dry-run)]
@@ -536,13 +712,13 @@
                    [("-c" "--create") "Create the specified stack or stack group" (action 'create)]
                    [("-u" "--update") "Update the specified stack or stack group" (action 'update)]
                    [("-d" "--delete") "Delete the specified stack or stack group" (action 'delete)]
-                   [("-l" "--list") "List all known stacks or stack groups" (action 'list)]
+                   [("-l" "--list")   "List all known stacks or stack groups" (action 'list)]
+                   [("-p" "--params") "Print the parameters for a stack" (action 'params)]
                    #:args target-names (for/list ([name target-names]) (string->symbol name)))])
     (when (eq? (action) 'nil)
       (displayln "Error an action is required.\nPlease provide an action and try again.")
       (exit 1))
     (eval-config cftool-namespace (cft-path))
-    (check-cli-credentials (env) #f)
     (values (action) (is-group) targets (env) (show-warnings) (dry-run))))
 
 ;; Execute cftool using a cftool config
