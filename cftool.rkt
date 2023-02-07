@@ -131,12 +131,9 @@
        (define (id [env env-default])
          (stack 'id
                 path
-                (~? (first
-                     (filter
-                      values
-                      (list (and (~? (eq? env names.environment) #t)
-                                 names.stack-name)
-                            ...)))
+                (~? (first (filter values (list (and (~? (eq? env names.environment) #t)
+                                                     names.stack-name)
+                                                ...)))
                     stack-name)
                 (~? capabilities   null)
                 (~? dependencies   null)
