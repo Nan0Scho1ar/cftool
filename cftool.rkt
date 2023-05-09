@@ -113,7 +113,10 @@
            (~or*
             (~seq #:stack-name (names:stack-names ...))
             (~seq #:stack-name stack-name:expr)))
-          (~optional (~seq #:capabilities capabilities:expr))
+          (~optional
+           (~or*
+            (~seq #:capabilities (capabilities:expr ...))
+            (~seq #:capabilities capability:expr)))
           (~optional (~seq #:depends-on dependencies:expr))
           (~optional (~seq #:before-create before-create:expr))
           (~optional (~seq #:after-create after-create:expr))
@@ -135,7 +138,8 @@
                                                      names.stack-name)
                                                 ...)))
                     stack-name)
-                (~? capabilities   null)
+                (~? (~? (list capabilities ...) (list capability))
+                    null)
                 (~? dependencies   null)
                 (~? before-create  null)
                 (~? after-create   null)
@@ -268,11 +272,11 @@
 ;; Query AWS Functions ;;
 ;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(define (stack-exists region stack-name)
+(define (stack-exists region stack-name dry-run)
   (let*-values
       ([(args) (list "--region" region
                     "--stack-name" stack-name)]
-       [(status stdout stderr) (aws-cli "cloudformation" "describe-stacks" args)])
+       [(status stdout stderr) (aws-cli "cloudformation" "describe-stacks" args dry-run)])
     (= status 0)))
 
 
