@@ -341,8 +341,8 @@
   (let* ([region (symbol->string (environment-region env))]
          [query (string-append "LoadBalancers[?LoadBalancerName == `" load-balancer-name "`].DNSName[] || \"\"")]
          [args (list "--region" region
-                    "--query"  query
-                    "--output" "text")])
+                     "--query"  query
+                     "--output" "text")])
     (let-values ([(status stdout stderr)
                   (aws-cli "elbv2" "describe-load-balancers" args dry-run)])
       (if (= status 0)
@@ -357,7 +357,7 @@
 (define (iam-create-service-linked-role env service-name [dry-run #f])
   (let* ([region (symbol->string (environment-region env))]
          [args (list "--region" region
-                    "--aws-service-name" service-name)])
+                     "--aws-service-name" service-name)])
     (let-values ([(status stdout stderr)
                   (aws-cli "iam" "create-service-linked-role" args dry-run)])
       (if (= status 0)
@@ -368,6 +368,21 @@
              (displayln "Failed to create service linked role for: " service-name)
              (exit 1)))))))
 
+(define (secretsmanager-get-secret-arn env secret-name [dry-run #f])
+  (let* ([region (symbol->string (environment-region env))]
+         [args (list "--region" region
+                     "--secret-id" secret-name
+                     "--query" "ARN"
+                     "--output" "text")])
+    (let-values ([(status stdout stderr)
+                  (aws-cli "secretsmanager" "describe-secret" args dry-run)])
+      (if (= status 0)
+         (string-trim stdout)
+         (begin
+           (displayln stderr)
+           (begin
+             (displayln "Failed to fetch arn for secret: " secret-name)
+             (exit 1)))))))
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Modify Stack Functions ;;
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;
