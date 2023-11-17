@@ -15,7 +15,7 @@ use env_logger::Builder;
 #[derive(Parser, Debug)]
 #[command(name = "CFTool")]
 #[command(author = "Christopher Mackinga <christopher.mackinga@gmail.com>")]
-#[command(version = "0.1.0")]
+#[command(version = "2.0.0-alpha")]
 struct Cli {
     #[arg(short, long, value_name = "FILE")]
     config: Option<PathBuf>,
