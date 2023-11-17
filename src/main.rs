@@ -125,8 +125,22 @@ fn diff_deployment(configs: HashMap<String, config::Configuration>, deployment: 
 fn describe_deployment(configs: HashMap<String, config::Configuration>, deployment: String) -> () {
     let configuration = configs.get(&deployment);
     match configuration {
-        Some(config) => println!("{}", config),
-        None => todo!(),
+        Some(config) => {
+            println!("--------------\n LOCAL CONFIG\n--------------");
+            println!("{}", config);
+            println!("\n---------------\n REMOTE CONFIG\n---------------");
+            let stack_name = config.name.to_owned();
+            let remote = aws::describe_stack(stack_name.to_owned());
+            match remote {
+                Ok(rem) => {
+                    dbg!(rem);
+                },
+                Err(error) =>  {
+                    error!("Failed to fetch stack '{}'\n{}", stack_name, error);
+                }
+            };
+        },
+        None => error!("Unknown deployment '{}'", deployment)
     };
 }
 
@@ -209,10 +223,13 @@ fn create_deployment(configs: HashMap<String, config::Configuration>, deployment
     }
 }
 
+
+// TODO confirm stack exists before updating 
 fn update_deployment(configs: HashMap<String, config::Configuration>, deployment: String) -> () {
     dbg!(deployment);
 }
 
+// TODO confirm stack exists before deleting 
 fn delete_deployment(configs: HashMap<String, config::Configuration>, deployment: String) -> () {
     dbg!(deployment);
 }
