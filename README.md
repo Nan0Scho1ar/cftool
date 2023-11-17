@@ -6,7 +6,7 @@
 - `Template`: A file containing CloudFormation resource definitions used to create a `Stack`. This exists locally.
 - `Configuration`: A set of properties defined in the config.yaml for deploying a `Stack` using a specific `Template`. This exist locally.
 - `Stack`: A instance which has been provisioned inside CloudFormation. This exists in AWS.
-- `Deployment`: A related set the above three pieces. A deployment consists of a `Stack` and also the `Template` and `Configuration` which was used to create it. This does really not "exist", in the sense that it's merely an abstract name for referring to the sum of it's pieces.
+- `Deployment`: A related set the above three pieces. A deployment consists of a `Stack` and also the `Template` and `Configuration` which was used to create it. This does not really "exist", in the sense that it's merely an abstract name for referring to the sum of it's pieces.
 
 ### Commands
 

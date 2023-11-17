@@ -6,22 +6,26 @@ mod aws;
 use std::path::PathBuf;
 use std::fs;
 // use std::error::Error;
+use std::collections::HashMap;
 use clap::{Parser, Subcommand};
 // use serde::{Deserialize, Serialize};
 use log::{ LevelFilter, trace, debug, info, warn, error };
 use env_logger::Builder;
 
-/// AWS-CLI CloudFormation made easy
+/// CFTool - CloudFormation made easy
 #[derive(Parser, Debug)]
 #[command(name = "CFTool")]
 #[command(author = "Christopher Mackinga <christopher.mackinga@gmail.com>")]
 #[command(version = "2.0.0-alpha")]
 struct Cli {
+    /// TODO implement manual config path
     #[arg(short, long, value_name = "FILE")]
     config: Option<PathBuf>,
+    ///TODO implement dry_run
     #[arg(short, long, default_value_t = false)]
     dry_run: bool,
     #[arg(long)]
+    /// Enable verbose debug logging
     debug: bool,
     #[command(subcommand)]
     command: BaseCommands,
@@ -29,52 +33,52 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum BaseCommands {
-    /// List stacks currently in AWS
-    List {
-        #[command(subcommand)]
-        list_command: ListCommands,
+    /// List all available deployments for usage with other commands
+    List,
+    /// Give an overview of the specified deployment
+    Describe {
+        deployment: String,
     },
-    /// Compare your local configuration against AWS
+    /// Diff the local Template and Configuration against the provisioned Stack in CloudFormation
+    Diff {
+        deployment: String,
+    },
+    /// Create a new Stack in CloudFormation using the local Template and Configuration
+    Create {
+        deployment: String,
+    },
+    /// Update an existing Stack in CloudFormation using the local Template and Configuration
+    Update {
+        deployment: String,
+        
+    },
+    /// Delete the existing Stack in CloudFormation which is associated with this deployment
+    Delete {
+        deployment: String,
+    },
+    /// Subcommands for comparing distinct deployments
     Compare {
-        /// The stack to compare
         #[command(subcommand)]
         compare_command: CompareCommands,
     },
-    Create {
-        /// The stacks to create
-        stacknames: Vec<String>,
-    },
-    Update {
-        /// The stacks to update
-        stacknames: Vec<String>,
-        
-    },
-    Delete {
-        /// The stacks to delete
-        stacknames: Vec<String>,
-    },
-}
-
-#[derive(Subcommand, Debug)]
-enum ListCommands {
-    Deployment,
-    Local,
-    Remote,
 }
 
 #[derive(Subcommand, Debug)]
 enum CompareCommands {
-    /// <stack-name>:<instance-name> referring to a deployed instance of a stack
-    Deployment {
-        deployment_name: String,
+    /// Compare the local templates of two distinct deployments
+    Templates {
+        deployment1: String,
+        deployment2: String,
     },
-    Local {
-        stackname1: String,
-        stackname2: String,
+    /// Compare the local configurations of two distinct deployments
+    Configs {
+        deployment1: String,
+        deployment2: String,
     },
-    Remote {
-        stackname1: String,
-        stackname2: String,
+    /// Compare the remote stacks of two distinct deployments
+    Stacks {
+        deployment1: String,
+        deployment2: String,
     },
 }
 
@@ -86,62 +90,68 @@ fn main() {
     let log_level = if cli.debug {LevelFilter::max()} else {LevelFilter::Error};
     Builder::new().filter_level(log_level).init();
 
-    match cli.command {
-        BaseCommands::List { list_command } => {
-            match list_command {
-                ListCommands::Deployment => { list_deployment(); }
-                ListCommands::Local => { list_local(); }
-                ListCommands::Remote => { list_remote(); }
-            }
-        }
-        BaseCommands::Compare { compare_command } => {
-            match compare_command {
-                CompareCommands::Local { stackname1, stackname2 } => { compare_local(stackname1, stackname2); }  
-                CompareCommands::Remote { stackname1, stackname2 } => { compare_remote(stackname1, stackname2); }  
-                CompareCommands::Deployment { deployment_name } => { compare_deployment(deployment_name); }  
-            }
-        } 
-        BaseCommands::Create { stacknames } => { create_stacks(&stacknames); }
-        BaseCommands::Update { stacknames } => { update_stacks(&stacknames); }
-        BaseCommands::Delete { stacknames } => { delete_stacks(&stacknames); }
-    };
-
-}
-
-fn list_deployment() -> () {
-    todo!();
-}
-
-fn list_local() -> () {
+    // TODO implement loading non default config file 
     let result = config::get_configurations();
-    match result {
-        Ok(deployments) => {
-            dbg!(deployments);
-        }
-        
-        Err(error) => {
-            error!("Encountered error in list_local(): {}", error.to_string());
-        }
+
+    if result.is_err() {
+        error!("Failed to load config file: {}", result.unwrap_err());
+        std::process::abort();
     }
 
+    let configs = result.unwrap();
+    
+    match cli.command {
+        BaseCommands::List => { list_deployments(configs); }
+        BaseCommands::Describe { deployment } => { describe_deployment(configs, deployment); }
+        BaseCommands::Diff { deployment } => { diff_deployment(configs, deployment); }
+        BaseCommands::Create { deployment } => { create_deployment(configs, deployment); }
+        BaseCommands::Update { deployment } => { update_deployment(configs, deployment); }
+        BaseCommands::Delete { deployment } => { delete_deployment(configs, deployment); }
+        BaseCommands::Compare { compare_command } => {
+            match compare_command {
+                CompareCommands::Templates { deployment1, deployment2 } => { compare_template(configs, deployment1, deployment2); }  
+                CompareCommands::Configs { deployment1, deployment2 } => { compare_config(configs, deployment1, deployment2); }  
+                CompareCommands::Stacks { deployment1, deployment2 } => { compare_stack(configs, deployment1, deployment2); }  
+            }
+        } 
+    };
+
 }
 
-fn list_remote() -> () {
-    let result = aws::describe_stacks();
-    match result {
-        Ok(stacks) => {
-            let stack_names: Vec<String> = stacks.iter().map(|s| s.stack_name.clone()).collect();
-            dbg!(stack_names);
-        }
-        Err(error) => {
-            error!("Encountered error in list_remote(): {}", error.to_string());
-        }
+fn diff_deployment(configs: HashMap<String, config::Configuration>, deployment: String) -> () {
+    todo!()
+}
+
+fn describe_deployment(configs: HashMap<String, config::Configuration>, deployment: String) -> () {
+    let configuration = configs.get(&deployment);
+    match configuration {
+        Some(config) => println!("{}", config),
+        None => todo!(),
     };
 }
 
-fn compare_remote(stackname1: String, stackname2: String) -> () {
-    let result1 = aws::get_stack_template(stackname1);
-    let result2 = aws::get_stack_template(stackname2);
+fn list_deployments(configs: HashMap<String, config::Configuration>) -> () {
+    let mut deployment_names: Vec<&String> = configs.keys().collect();
+    deployment_names.sort(); 
+    deployment_names.iter().for_each(|s| println!("{}", s));
+}
+
+// fn list_remote() -> () {
+//     let result = aws::describe_stacks();
+//     match result {
+//         Ok(stacks) => {
+//             let stack_names: Vec<String> = stacks.iter().map(|s| s.stack_name.clone()).collect();
+//             dbg!(stack_names);
+//         }
+//         Err(error) => {
+//             error!("Encountered error in list_remote(): {}", error.to_string());
+//         }
+//     };
+// }
+
+fn compare_stack(configs: HashMap<String, config::Configuration>, deployment1: String, deployment2: String) -> () {
+    let result1 = aws::get_stack_template(deployment1);
+    let result2 = aws::get_stack_template(deployment2);
     if let (Ok(stack1), Ok(stack2)) = (&result1, &result2) {
         helpers::print_diff(&stack1, &stack2);
     } else {
@@ -154,9 +164,9 @@ fn compare_remote(stackname1: String, stackname2: String) -> () {
     }
 }
 
-fn compare_local(stackname1: String, stackname2: String) -> () {
-    let result1 = fs::read_to_string(stackname1);
-    let result2 = fs::read_to_string(stackname2);
+fn compare_template(configs: HashMap<String, config::Configuration>, deployment1: String, deployment2: String) -> () {
+    let result1 = fs::read_to_string(deployment1);
+    let result2 = fs::read_to_string(deployment2);
     if let (Ok(stack1), Ok(stack2)) = (&result1, &result2) {
         helpers::print_diff(&stack1, &stack2);
     } else {
@@ -169,23 +179,23 @@ fn compare_local(stackname1: String, stackname2: String) -> () {
     }
 }
 
-fn compare_deployment(deployment_name: String) -> () {
-    let result1 = fs::read_to_string(deployment_name);
-    let result2 = aws::get_stack_template(String::from("MOSTinstance-app3"));
-    if let (Ok(stack1), Ok(stack2)) = (&result1, &result2) {
-        helpers::print_diff(&stack1, &stack2);
-    } else {
-        if let Err(error1) = result1 {
-            error!("Encountered error in compare_deployment(): {}", error1.to_string());
-        }
-        if let Err(error2) = result2 {
-            error!("Encountered error in compare_deployment(): {}", error2.to_string());
-        }
-    }
+fn compare_config(configs: HashMap<String, config::Configuration>, deployment1: String, deployment2: String) -> () {
+    // let result1 = fs::read_to_string(deployment_name);
+    // let result2 = aws::get_stack_template(String::from("MOSTinstance-app3"));
+    // if let (Ok(stack1), Ok(stack2)) = (&result1, &result2) {
+    //     helpers::print_diff(&stack1, &stack2);
+    // } else {
+    //     if let Err(error1) = result1 {
+    //         error!("Encountered error in compare_deployment(): {}", error1.to_string());
+    //     }
+    //     if let Err(error2) = result2 {
+    //         error!("Encountered error in compare_deployment(): {}", error2.to_string());
+    //     }
+    // }
 }
 
-fn create_stacks(stacknames: &Vec<String>) -> () {
-    dbg!(stacknames);
+fn create_deployment(configs: HashMap<String, config::Configuration>, deployment: String) -> () {
+    dbg!(deployment);
     let result = aws::create_stack(Some("ap-southeast-2".to_string()),
                                    Some("test-stack".to_string()),
                                    Some("Some-body".to_string()),
@@ -199,10 +209,10 @@ fn create_stacks(stacknames: &Vec<String>) -> () {
     }
 }
 
-fn update_stacks(stacknames: &Vec<String>) -> () {
-    dbg!(stacknames);
+fn update_deployment(configs: HashMap<String, config::Configuration>, deployment: String) -> () {
+    dbg!(deployment);
 }
 
-fn delete_stacks(stacknames: &Vec<String>) -> () {
-    dbg!(stacknames);
+fn delete_deployment(configs: HashMap<String, config::Configuration>, deployment: String) -> () {
+    dbg!(deployment);
 }
