@@ -1,2 +1,3 @@
-cftool
-scratch.rkt
+/target
+stacks.cft
+/src/example.yaml
