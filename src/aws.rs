@@ -1,7 +1,10 @@
-use crate::helpers;
+use crate::{helpers, config};
+
+use std::fmt;
 use std::error::Error;
 use std::process::Command;
 use serde::{Deserialize, Serialize};
+use log::error;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum StackStatus {
@@ -27,7 +30,7 @@ pub struct StackDriftInformation {
 pub struct StackRollbackConfiguration {
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct StackParameter {
 
     #[serde(rename = "ParameterKey")]
@@ -56,6 +59,8 @@ pub struct Stack {
     pub parameters: Option<Vec<StackParameter>>,
     #[serde(rename = "CreationTime")]
     pub creation_time: String,
+    #[serde(rename = "Capabilities")]
+    pub capabilities: Option<Vec<String>>,
     // #[serde(rename = "")]
     // rollback_configuration: StackRollbackConfiguration,
     // #[serde(rename = "")]
@@ -76,7 +81,57 @@ pub struct Stacks {
     pub stacks: Vec<Stack>
 }
 
-pub fn command(args: Vec<&str>) -> Result<String, String> {
+impl fmt::Display for Stack {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.to_string())
+    }
+}
+
+impl Stack {
+    fn format_parameters(&self) -> String {
+        if self.parameters.is_none() || self.parameters.as_ref().unwrap().is_empty() {
+            return "None".to_string()
+        }
+
+        let mut params: Vec<StackParameter> = self.parameters.as_ref().unwrap().to_vec();
+        params.sort_by(|a, b| a.parameter_key.cmp(&b.parameter_key));
+
+        let params = params
+            .iter()
+            .map(|key| format!("{}: {}", key.parameter_key.clone(), key.parameter_value.clone()))
+            .collect::<Vec<String>>()
+            .join("\n    ");
+
+        format!("{}{}", "\n    ", params)
+    }
+
+    pub fn to_string(&self) -> String {
+        let arn_fragments: Vec<String> = self.stack_id.split(":").map(|str| str.to_string()).collect();
+        let region = arn_fragments.get(3).unwrap_or(&String::new()).clone();
+        let aws_account_id = arn_fragments.get(4).unwrap_or(&String::new()).clone();
+        
+        format!(
+            "Name: {}\nRegion: {}\nAwsAccountId: {}\nCapabilities: {}\nParameters: {}",
+            self.stack_name,
+            region,
+            aws_account_id,
+            self.capabilities
+                .as_ref()
+                .map_or_else(|| "None".to_string(), |cap| cap.join(" ")),
+            self.format_parameters()
+        )
+    }
+}
+
+pub enum CloudFormation {
+    Create,
+    Update,
+    Delete,
+    Describe,
+    GetTemplate
+}
+
+pub fn command(args: Vec<String>) -> Result<String, String> {
     // AWS CLI command to list objects in an S3 bucket
     let mut aws_cli_command = Command::new("aws");
     for arg in &args[0..] {
@@ -103,57 +158,63 @@ pub fn command(args: Vec<&str>) -> Result<String, String> {
     }
 }
 
-pub fn get_stack_template(stack_name: String) -> Result<String, Box<dyn Error>> {
-    let result = command(vec!["cloudformation", "get-template",
-                              "--stack-name", &stack_name,
-                              "--template-stage", "Original",
-                              "--query", "TemplateBody",
-                              "--output", "text"])?;
-    Ok(result[..result.len()-1].to_string())
+pub fn get_stack_template(config: &config::Configuration) -> Result<String, Box<dyn Error>> {
+    let cmd = config.to_cmd(CloudFormation::GetTemplate);
+    let result = command(cmd);
+    match result {
+        Ok(r) => Ok(r[..r.len()-1].to_string()),
+        Err(e) => {
+            error!("{}", format!("Failed to fetch stack template for deployment '{}':\n{}", config.deployment_name, e));
+            Err(e.into())
+        },
+    }
+    
 }
 
-pub fn describe_stack(stack_name: String) -> Result<Stack, Box<dyn Error>> {
-    let result = command(vec!["cloudformation", "describe-stacks", "--stack-name", &stack_name])?;
-    let stacks: Stacks = serde_json::from_str(&result)?;
-    Ok(helpers::get_single(stacks.stacks)?)
+pub fn describe_stack(config: &config::Configuration) -> Result<Stack, Box<dyn Error>> {
+    let cmd = config.to_cmd(CloudFormation::Describe);
+    let result = command(cmd);
+
+    match result {
+        Ok(r) => {
+             match serde_json::from_str::<Stacks>(&r) {
+                Ok(stacks) => {
+                    match helpers::get_single(stacks.stacks) {
+                        Ok(stack) => Ok(stack),
+                        Err(e) => {
+                            error!("{}", format!("Failed to fetch stack for deployment '{}':\n{}", config.deployment_name, e));
+                            Err(e.into())
+                        },
+                    }
+                },
+                Err(e) => {
+                    error!("{}", format!("Failed to parse stack for deployment '{}':\n{}", config.deployment_name, e));
+                    Err(e.into())
+                },
+            }
+        }
+        Err(e) => {
+            error!("{}", format!("Failed to fetch stack for deployment '{}':\n{}", config.deployment_name, e));
+            Err(e.into())
+        },
+    }
+
 }
 
-pub fn describe_stacks() -> Result<Vec<Stack>, Box<dyn Error>> {
-    let result = command(vec!["cloudformation", "describe-stacks"])?;
-    let stacks: Stacks = serde_json::from_str(&result)?;
-    Ok(stacks.stacks)
+pub fn create_stack(config: config::Configuration) -> Result<String, String> {
+    let cmd = config.to_cmd(CloudFormation::Create);
+
+    command(cmd)
 }
 
+pub fn update_stack(config: config::Configuration) -> Result<String, String> {
+    let cmd = config.to_cmd(CloudFormation::Update);
 
-pub fn create_stack(region: Option<String>,
-                    stack_name: Option<String>,
-                    template_body: Option<String>,
-                    capabilities: Option<String>,
-                    parameters: Option<String>) -> Result<String, String> {
+    command(cmd)
+}
 
-    let mut cmd: Vec<String> = Vec::new();
+pub fn delete_stack(config: config::Configuration) -> Result<String, String> {
+    let cmd = config.to_cmd(CloudFormation::Delete);
 
-    if let Some(reg) = region {
-        cmd.push("--region".to_string());
-        cmd.push(reg);
-    }
-    if let Some(name) = stack_name {
-        cmd.push("--stack-name".to_string());
-        cmd.push(name);
-    }
-    if let Some(body) = template_body {
-        cmd.push("--template-body".to_string());
-        cmd.push(body);
-    }
-    if let Some(caps) = capabilities {
-        cmd.push("--capabilities".to_string());
-        cmd.push(caps);
-    }
-    if let Some(params) = parameters {
-        cmd.push("--parameters".to_string());
-        cmd.push(params);
-    }
-
-    Ok(cmd.join(" "))
-
+    command(cmd)
 }

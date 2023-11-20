@@ -29,13 +29,13 @@ pub fn get_single<T>(vec: Vec<T>) -> Result<T, Box<dyn Error>> {
     }
 }
 
-pub fn print_lines_range(input_string: &str, start_line: usize, end_line: usize) {
-    for (line_number, line) in input_string.lines().enumerate() {
-        if line_number + 1 >= start_line && line_number + 1 <= end_line {
-            println!("Line {}: {}", line_number + 1, line);
-        }
-    }
-}
+// pub fn print_lines_range(input_string: &str, start_line: usize, end_line: usize) {
+//     for (line_number, line) in input_string.lines().enumerate() {
+//         if line_number + 1 >= start_line && line_number + 1 <= end_line {
+//             println!("Line {}: {}", line_number + 1, line);
+//         }
+//     }
+// }
 
 struct Line(Option<usize>);
 
