@@ -1,5 +1,6 @@
 use crate::{helpers, config};
 
+use std::env;
 use std::fmt;
 use std::error::Error;
 use std::process::Command;
@@ -132,7 +133,6 @@ pub enum CloudFormation {
 }
 
 pub fn command(args: Vec<String>) -> Result<String, String> {
-    // AWS CLI command to list objects in an S3 bucket
     let mut aws_cli_command = Command::new("aws");
     for arg in &args[0..] {
         aws_cli_command.arg(arg);
@@ -159,6 +159,7 @@ pub fn command(args: Vec<String>) -> Result<String, String> {
 }
 
 pub fn get_stack_template(config: &config::Configuration) -> Result<String, Box<dyn Error>> {
+    profile_valid(&config)?;
     let cmd = config.to_cmd(CloudFormation::GetTemplate);
     let result = command(cmd);
     match result {
@@ -172,6 +173,7 @@ pub fn get_stack_template(config: &config::Configuration) -> Result<String, Box<
 }
 
 pub fn describe_stack(config: &config::Configuration) -> Result<Stack, Box<dyn Error>> {
+    profile_valid(&config)?;
     let cmd = config.to_cmd(CloudFormation::Describe);
     let result = command(cmd);
 
@@ -201,20 +203,52 @@ pub fn describe_stack(config: &config::Configuration) -> Result<Stack, Box<dyn E
 
 }
 
+
 pub fn create_stack(config: config::Configuration) -> Result<String, String> {
+    profile_valid(&config)?;
     let cmd = config.to_cmd(CloudFormation::Create);
 
     command(cmd)
 }
 
 pub fn update_stack(config: config::Configuration) -> Result<String, String> {
+    profile_valid(&config)?;
     let cmd = config.to_cmd(CloudFormation::Update);
 
     command(cmd)
 }
 
 pub fn delete_stack(config: config::Configuration) -> Result<String, String> {
+    profile_valid(&config)?;
     let cmd = config.to_cmd(CloudFormation::Delete);
 
     command(cmd)
+}
+
+fn profile_valid(config: &config::Configuration) -> Result<(), String> {
+    get_current_aws_profile()?;
+    let current_account_id = get_aws_account_id()?;
+    if current_account_id == config.aws_account_id {
+        Ok(())
+    } else {
+        Err("AWS_PROFILE does not match requested deployment".to_string())
+    }
+}
+
+pub fn get_current_aws_profile() -> Result<(), String> {
+    match env::var("AWS_PROFILE") {
+        Ok(value) => {
+            println!("Using AWS_PROFILE=\"{}\"", value);
+            Ok(())
+        },
+        Err(_) => Err("AWS_PROFILE is not set".to_string())
+    }
+}
+
+pub fn get_aws_account_id() -> Result<String, String> {
+    let cmd = vec!["sts".to_string(),      "get-caller-identity".to_string(),
+                   "--query".to_string(),  "Account".to_string(),
+                   "--output".to_string(), "text".to_string()];
+
+    Ok(command(cmd)?.trim().to_string())
 }
