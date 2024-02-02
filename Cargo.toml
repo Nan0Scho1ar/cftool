@@ -9,8 +9,11 @@ edition = "2021"
 clap = { version = "4.4.6", features = ["derive"] }
 console = "0.15.7"
 env_logger = "0.10.0"
+itertools = "0.12.1"
 log = { version = "0.4.20", features = ["std", "serde"] }
+owo-colors = "4.0.0"
 serde = { version = "1.0.189", features = ["derive"]}
 serde_json = "1.0.107"
 serde_yaml = "0.9.27"
 similar = { version = "2.3.0", features = ["unicode", "inline", "serde"] }
+tabled = { version = "0.15.0", features = ["ansi"] }

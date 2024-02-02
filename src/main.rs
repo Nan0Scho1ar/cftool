@@ -9,6 +9,8 @@ use clap::{Parser, Subcommand};
 // use serde::{Deserialize, Serialize};
 use log::{ LevelFilter, debug, error };
 use env_logger::Builder;
+use itertools::Itertools;
+use tabled::Table;
 
 /// CFTool - CloudFormation made easy
 #[derive(Parser, Debug)]
@@ -28,8 +30,12 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum BaseCommands {
-    /// List all available deployments for usage with other commands
+    /// List available deployments for usage with other commands (Current AWS Account)
     List,
+    /// List available deployments for usage with other commands (All AWS Accounts)
+    ListAll,
+    /// Get an overview of all deployments matching current AWS Account
+    Status,
     /// Give an overview of the specified deployment
     Describe {
         deployment: String,
@@ -40,15 +46,21 @@ enum BaseCommands {
     },
     /// Create a new Stack in CloudFormation using the local Template and Configuration
     Create {
+        #[arg(short, long)]
+        wait: bool,
         deployment: String,
     },
     /// Update an existing Stack in CloudFormation using the local Template and Configuration
     Update {
+        #[arg(short, long)]
+        wait: bool,
         deployment: String,
         
     },
     /// Delete the existing Stack in CloudFormation which is associated with this deployment
     Delete {
+        #[arg(short, long)]
+        wait: bool,
         deployment: String,
     },
     /// Subcommands for comparing distinct deployments
@@ -94,12 +106,14 @@ fn main() {
     let configs = result.unwrap();
     
     match cli.command {
-        BaseCommands::List => { list_deployments(configs); }
+        BaseCommands::List => { list_deployments(configs, false); }
+        BaseCommands::ListAll => { list_deployments(configs, true); }
+        BaseCommands::Status => { status(configs); }
         BaseCommands::Describe { deployment } => { describe_deployment(configs, deployment); }
         BaseCommands::Diff { deployment } => { diff_deployment(configs, deployment); }
-        BaseCommands::Create { deployment } => { create_deployment(configs, deployment); }
-        BaseCommands::Update { deployment } => { update_deployment(configs, deployment); }
-        BaseCommands::Delete { deployment } => { delete_deployment(configs, deployment); }
+        BaseCommands::Create { deployment, wait } => { create_deployment(configs, deployment, wait); }
+        BaseCommands::Update { deployment, wait } => { update_deployment(configs, deployment, wait); }
+        BaseCommands::Delete { deployment, wait } => { delete_deployment(configs, deployment, wait); }
         BaseCommands::Compare { compare_command } => {
             match compare_command {
                 CompareCommands::Templates { deployment1, deployment2 } => { compare_template(configs, deployment1, deployment2); }  
@@ -111,31 +125,35 @@ fn main() {
 
 }
 
+fn status(configs: HashMap<String, config::Configuration>) -> () {
+    
+    let _ = aws::get_current_aws_profile();
+    println!();
+    if let Ok(current_account_id) = aws::get_aws_account_id() {
+        let diffs = configs
+            .iter()
+            .filter(|c| c.1.aws_account_id == current_account_id) 
+            .sorted_by_key(|c| c.0)
+            .map(|c| {
+                println!("Diffing {}...", c.0);
+                aws::create_deployment_diff(&configs, &c.0)
+            })
+            .filter_map(Result::ok)
+            .collect::<Vec<helpers::DeploymentDiff>>();
+
+        println!("{}", Table::new(diffs).to_string())
+        // diffs.iter()
+        //      .for_each(|d| println!("{}   CONFIG: {}    TEMPLATE: {}", d.deployment_name, d.config_state(), d.template_state()));
+    }
+}
+
 
 fn diff_deployment(configs: HashMap<String, config::Configuration>, deployment: String) -> () {
-    let Some(config) = config::get_deployment(&configs, &deployment) else { return };
-    let Ok(template_str1) = config::get_template(&config.path) else { return };
-
-    let Ok(stack_config2) = aws::describe_stack(&config) else { return };
-    let Ok(template_str2) = aws::get_stack_template(&config) else { return };
-
-    let stack_cfg1 = config.to_string();
-    let stack_cfg2 = stack_config2.to_string();
+    let Ok(diff) = aws::create_deployment_diff(&configs, &deployment) else { return };
     
-    if &stack_cfg1 == &stack_cfg2 {
-        println!("CONFIG: IDENTICAL");
-    } else {
-        println!("CONFIG:");
-        helpers::print_diff(&stack_cfg2.to_string(), &stack_cfg1.to_string());
-        println!("\n");
-    }
-
-    if &template_str1 == &template_str2 {
-        println!("TEMPLATE: IDENTICAL");
-    } else {
-        println!("TEMPLATE:");
-        helpers::print_diff(&template_str2.to_string(), &template_str1.to_string());
-    }
+    println!("{}", diff.deployment_name);
+    diff.print_diff();
+    println!();
 
 }
 
@@ -148,10 +166,22 @@ fn describe_deployment(configs: HashMap<String, config::Configuration>, deployme
 }
 
 
-fn list_deployments(configs: HashMap<String, config::Configuration>) -> () {
-    let mut deployment_names: Vec<&String> = configs.keys().collect();
-    deployment_names.sort(); 
-    deployment_names.iter().for_each(|s| println!("{}", s));
+fn list_deployments(configs: HashMap<String, config::Configuration>, all: bool) -> () {
+    let mut current_account_id: String = "".to_string();
+
+    if !all {
+        let _ = aws::get_current_aws_profile();
+        println!();
+        if let Ok(id) = aws::get_aws_account_id() {
+            current_account_id = id;
+        }
+    }
+
+    configs.iter()
+           .filter(|c| c.1.aws_account_id == current_account_id)
+           .map(|c| c.0)
+           .sorted()
+           .for_each(|c| println!("{}", c));
 }
 
 
@@ -216,8 +246,8 @@ fn compare_config(configs: HashMap<String, config::Configuration>, deployment1: 
 }
 
 
-// TODO confirm stack does not exist before creating 
-fn create_deployment(configs: HashMap<String, config::Configuration>, deployment: String) -> () {
+// TODO confirm stack does not exist before creating
+fn create_deployment(configs: HashMap<String, config::Configuration>, deployment: String, wait: bool) -> () {
     let Some(config) = config::get_deployment(&configs, &deployment) else { return };
 
     match aws::create_stack(config) {
@@ -228,7 +258,7 @@ fn create_deployment(configs: HashMap<String, config::Configuration>, deployment
 
 
 // TODO confirm stack exists before updating 
-fn update_deployment(configs: HashMap<String, config::Configuration>, deployment: String) -> () {
+fn update_deployment(configs: HashMap<String, config::Configuration>, deployment: String, wait: bool) -> () {
     let Some(config) = config::get_deployment(&configs, &deployment) else { return };
 
     match aws::update_stack(config) {
@@ -239,7 +269,7 @@ fn update_deployment(configs: HashMap<String, config::Configuration>, deployment
 
 
 // TODO confirm stack exists before deleting 
-fn delete_deployment(configs: HashMap<String, config::Configuration>, deployment: String) -> () {
+fn delete_deployment(configs: HashMap<String, config::Configuration>, deployment: String, wait: bool) -> () {
     let Some(config) = config::get_deployment(&configs, &deployment) else { return };
 
     match aws::delete_stack(config) {

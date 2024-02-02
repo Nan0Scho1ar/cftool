@@ -4,6 +4,7 @@ use std::env;
 use std::fmt;
 use std::error::Error;
 use std::process::Command;
+use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use log::error;
 
@@ -159,7 +160,6 @@ pub fn command(args: Vec<String>) -> Result<String, String> {
 }
 
 pub fn get_stack_template(config: &config::Configuration) -> Result<String, Box<dyn Error>> {
-    profile_valid(&config)?;
     let cmd = config.to_cmd(CloudFormation::GetTemplate);
     let result = command(cmd);
     match result {
@@ -173,7 +173,6 @@ pub fn get_stack_template(config: &config::Configuration) -> Result<String, Box<
 }
 
 pub fn describe_stack(config: &config::Configuration) -> Result<Stack, Box<dyn Error>> {
-    profile_valid(&config)?;
     let cmd = config.to_cmd(CloudFormation::Describe);
     let result = command(cmd);
 
@@ -225,7 +224,7 @@ pub fn delete_stack(config: config::Configuration) -> Result<String, String> {
     command(cmd)
 }
 
-fn profile_valid(config: &config::Configuration) -> Result<(), String> {
+pub fn profile_valid(config: &config::Configuration) -> Result<(), String> {
     get_current_aws_profile()?;
     let current_account_id = get_aws_account_id()?;
     if current_account_id == config.aws_account_id {
@@ -251,4 +250,27 @@ pub fn get_aws_account_id() -> Result<String, String> {
                    "--output".to_string(), "text".to_string()];
 
     Ok(command(cmd)?.trim().to_string())
+}
+
+pub fn create_deployment_diff(configs: &HashMap<String, config::Configuration>, deployment: &String)
+                         -> Result<helpers::DeploymentDiff, String>  {
+    
+    let Some(config) = config::get_deployment(&configs, deployment) else { return Err("Failed to find local deployment".to_string()) };
+    let Ok(template_str1) = config::get_template(&config.path) else { return Err("Failed to find local template".to_string()) };
+
+    let Ok(stack_config2) = describe_stack(&config) else { return Err("Failed to fetch remote stack".to_string()) };
+    let Ok(template_str2) = get_stack_template(&config) else { return Err("Failed to fetch remote template".to_string()) };
+
+    let stack_cfg1 = config.to_string();
+    let stack_cfg2 = stack_config2.to_string();
+
+    let diff = helpers::DeploymentDiff {
+        deployment_name: deployment.to_string(),
+        local_config: config.to_string(),
+        remote_config: stack_config2.to_string(),
+        local_template: template_str1,
+        remote_template: template_str2
+    };
+
+    Ok(diff)
 }

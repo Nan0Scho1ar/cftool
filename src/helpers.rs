@@ -3,6 +3,8 @@ use std::error::Error;
 
 use console::{style, Style};
 use similar::{ChangeTag, TextDiff};
+use tabled::Tabled;
+use owo_colors::OwoColorize;
 
 // Define a custom error type
 #[derive(Debug)]
@@ -79,5 +81,49 @@ pub fn print_diff(string1: &String, string2: &String) -> () {
                 }
             }
         }
+    }
+}
+
+#[derive(Tabled)]
+pub struct DeploymentDiff {
+    #[tabled(rename = "DEPLOYMENT")]
+    pub deployment_name: String,
+    #[tabled(skip)]
+    pub local_config: String,
+    #[tabled(rename = "CONFIG")]
+    #[tabled(display_with("Self::config_state", self))]
+    pub remote_config: String,
+    #[tabled(skip)]
+    pub local_template: String,
+    #[tabled(rename = "TEMPLATE")]
+    #[tabled(display_with("Self::template_state", self))]
+    pub remote_template: String,
+}
+
+impl DeploymentDiff {
+    pub fn print_diff(&self) {
+        if self.local_config == self.remote_config {
+            println!("CONFIG: IDENTICAL");
+        } else {
+            println!("CONFIG:");
+            print_diff(&self.remote_config, &self.local_config);
+            println!("\n");
+        }
+
+        if self.local_template == self.remote_template {
+            println!("TEMPLATE: IDENTICAL");
+        } else {
+            println!("TEMPLATE:");
+            print_diff(&self.remote_template, &self.local_template);
+        }
+        println!();
+    }
+
+    pub fn config_state(&self) -> String {
+        if self.local_config == self.remote_config { "IDENTICAL".green().to_string() } else { "DRIFTED".red().to_string() }
+    }
+
+    pub fn template_state(&self) -> String {
+        if self.local_template == self.remote_template { "IDENTICAL".green().to_string() } else { "DRIFTED".red().to_string() }
     }
 }
